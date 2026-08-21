@@ -1,0 +1,64 @@
+name: CI – Lint, Test, Publish
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff black mypy
+      - run: ruff check .
+      - run: black --check .
+      - run: mypy src/ --ignore-missing-imports
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      REDIS_URL: redis://localhost:6379/0
+      SLACK_WEBHOOK_URL: https://hooks.slack.com/fake/webhook
+      PAGERDUTY_ROUTING_KEY: fake-routing-key
+      PAGERDUTY_EVENTS_URL: https://events.pagerduty.com/v2/enqueue
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev,test]"
+      - name: Unit tests
+        run: pytest tests/unit -v --cov=src --cov-report=term-missing
+      - name: Integration tests
+        run: pytest tests/integration -v --timeout=60
+
+  publish:
+    needs: [lint, test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - uses: pypa/gh-action-pypi-publish@release/v1
